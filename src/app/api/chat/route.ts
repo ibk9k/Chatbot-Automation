@@ -91,17 +91,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. Call Gemini and stream the completion
+    // 6. Call Gemini and stream the completion (with retry for 503 High Demand errors)
     const model = genAI.getGenerativeModel({ 
       model: 'gemini-3.5-flash',
       systemInstruction: client.system_prompt
     });
 
-    const result = await model.generateContentStream({
-      contents: [
-        { role: 'user', parts: [{ text: message }] }
-      ]
-    });
+    let result;
+    let attempts = 0;
+    const maxAttempts = 3;
+
+    while (attempts < maxAttempts) {
+      try {
+        result = await model.generateContentStream({
+          contents: [
+            { role: 'user', parts: [{ text: message }] }
+          ]
+        });
+        break; // Success, break the retry loop
+      } catch (err: any) {
+        attempts++;
+        const is503 = err.status === 503 || (err.message && (err.message.includes('503') || err.message.includes('Service Unavailable') || err.message.includes('demand')));
+        if (is503 && attempts < maxAttempts) {
+          console.warn(`Gemini 503 detected (attempt ${attempts}/${maxAttempts}). Retrying in 1.5s...`);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          continue;
+        }
+        throw err; // Re-throw if it's another error or we ran out of attempts
+      }
+    }
 
     const encoder = new TextEncoder();
     let responseText = '';
