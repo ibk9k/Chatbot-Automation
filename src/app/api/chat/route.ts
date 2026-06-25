@@ -166,10 +166,20 @@ export async function POST(request: NextRequest) {
 
 // Origin validation logic
 function checkOrigin(originHeader: string | null, allowedDomain: string): boolean {
-  if (!originHeader) {
+  if (!originHeader || originHeader === 'null') {
     // During local development, curl or server-to-server calls may not pass Origin.
-    // If the allowed domain is wildcarded or 'localhost', we allow it.
+    // Also, browsers send 'null' origin when loading HTML files via the file:// protocol.
     if (process.env.NODE_ENV === 'development') return true;
+    
+    const normalizedAllowed = allowedDomain.toLowerCase().trim();
+    if (
+      normalizedAllowed === '*' ||
+      normalizedAllowed === 'localhost' ||
+      normalizedAllowed === '127.0.0.1' ||
+      normalizedAllowed === 'null'
+    ) {
+      return true;
+    }
     return false;
   }
 
@@ -203,3 +213,4 @@ function checkOrigin(originHeader: string | null, allowedDomain: string): boolea
     return false;
   }
 }
+
