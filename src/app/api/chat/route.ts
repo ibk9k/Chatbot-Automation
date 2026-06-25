@@ -158,7 +158,7 @@ export async function POST(request: NextRequest) {
   } catch (err: any) {
     console.error('API Error:', err);
     return new NextResponse(
-      JSON.stringify({ error: 'Internal server error', details: err.message }),
+      JSON.stringify({ error: `Internal server error: ${err.message}` }),
       { status: 500, headers: { ...getCorsHeaders(origin), 'Content-Type': 'application/json' } }
     );
   }
