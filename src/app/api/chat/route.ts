@@ -91,18 +91,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. Call Gemini and stream the completion (with retry for 503 High Demand errors)
-    const model = genAI.getGenerativeModel({ 
-      model: 'gemini-3.5-flash',
-      systemInstruction: client.system_prompt
-    });
-
+    // 6. Call Gemini and stream the completion (with retry & fallback for 503 High Demand errors)
     let result;
     let attempts = 0;
     const maxAttempts = 3;
+    let currentModelName = 'gemini-3.5-flash';
 
     while (attempts < maxAttempts) {
       try {
+        const model = genAI.getGenerativeModel({ 
+          model: currentModelName,
+          systemInstruction: client.system_prompt
+        });
+
         result = await model.generateContentStream({
           contents: [
             { role: 'user', parts: [{ text: message }] }
@@ -113,8 +114,13 @@ export async function POST(request: NextRequest) {
         attempts++;
         const is503 = err.status === 503 || (err.message && (err.message.includes('503') || err.message.includes('Service Unavailable') || err.message.includes('demand')));
         if (is503 && attempts < maxAttempts) {
-          console.warn(`Gemini 503 detected (attempt ${attempts}/${maxAttempts}). Retrying in 1.5s...`);
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+          if (currentModelName === 'gemini-3.5-flash') {
+            console.warn(`Gemini 3.5 Flash 503 detected. Falling back to Gemini 2.5 Flash...`);
+            currentModelName = 'gemini-2.5-flash';
+          } else {
+            console.warn(`Gemini 503 detected on fallback model (attempt ${attempts}/${maxAttempts}). Retrying in 1.5s...`);
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          }
           continue;
         }
         throw err; // Re-throw if it's another error or we ran out of attempts
