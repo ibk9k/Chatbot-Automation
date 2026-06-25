@@ -97,10 +97,35 @@ const initialLogs = [
 export default function Home() {
   const [activeTab, setActiveTab] = useState<'clients' | 'logs' | 'docs'>('clients');
   const [selectedClientId, setSelectedClientId] = useState<string>('test-client');
-  const [clients, setClients] = useState<ClientData[]>(initialClients);
+  const [clients, setClients] = useState<ClientData[]>([]);
   const [logs, setLogs] = useState(initialLogs);
   const [copied, setCopied] = useState(false);
   const [currentOrigin, setCurrentOrigin] = useState<string>('https://remotelybot.vercel.app');
+
+  // Password authorization state
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
+  const [adminPassword, setAdminPassword] = useState<string>('');
+  const [authError, setAuthError] = useState<string>('');
+  const [isValidating, setIsValidating] = useState<boolean>(false);
+  const [isLoadingClients, setIsLoadingClients] = useState<boolean>(false);
+
+  // Modal State for Adding Clients
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [newClientId, setNewClientId] = useState<string>('');
+  const [newClientName, setNewClientName] = useState<string>('');
+  const [newSystemPrompt, setNewSystemPrompt] = useState<string>('');
+  const [newAllowedDomain, setNewAllowedDomain] = useState<string>('');
+  const [newMonthlyLimit, setNewMonthlyLimit] = useState<number>(1000);
+  const [modalError, setModalError] = useState<string>('');
+  const [isCreatingClient, setIsCreatingClient] = useState<boolean>(false);
+
+  // Check saved session on mount
+  useEffect(() => {
+    const savedPassword = localStorage.getItem('admin_password');
+    if (savedPassword) {
+      verifyPassword(savedPassword);
+    }
+  }, []);
 
   // Resolve Vercel deployed host or current url for code snippets
   useEffect(() => {
@@ -109,9 +134,76 @@ export default function Home() {
     }
   }, []);
 
-  const activeClient = clients.find(c => c.id === selectedClientId) || clients[0];
+  const verifyPassword = async (pass: string) => {
+    setIsValidating(true);
+    setAuthError('');
+    try {
+      const res = await fetch('/api/admin/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pass }),
+      });
+      if (res.ok) {
+        localStorage.setItem('admin_password', pass);
+        setAdminPassword(pass);
+        setIsAuthorized(true);
+        fetchClients(pass);
+      } else {
+        const data = await res.json();
+        setAuthError(data.error || 'Invalid password.');
+        localStorage.removeItem('admin_password');
+      }
+    } catch (err) {
+      setAuthError('Connection failed. Please try again.');
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  const fetchClients = async (pass: string) => {
+    setIsLoadingClients(true);
+    try {
+      const res = await fetch('/api/admin/clients', {
+        headers: {
+          'Authorization': pass,
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const clientList = data.clients || [];
+        setClients(clientList);
+        
+        // Select first client if selection is empty or invalid
+        if (clientList.length > 0) {
+          setSelectedClientId(prev => {
+            const exists = clientList.some((c: ClientData) => c.id === prev);
+            return exists ? prev : clientList[0].id;
+          });
+        }
+      } else {
+        if (res.status === 401) {
+          setIsAuthorized(false);
+          localStorage.removeItem('admin_password');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch clients:', err);
+    } finally {
+      setIsLoadingClients(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('admin_password');
+    setAdminPassword('');
+    setIsAuthorized(false);
+    setClients([]);
+  };
+
+  const activeClient = clients.find(c => c.id === selectedClientId) || clients[0] || null;
 
   const handleCopy = () => {
+    if (!activeClient) return;
     const scriptText = `<script src="${currentOrigin}/widget.js" data-client-id="${activeClient.id}"></script>`;
     navigator.clipboard.writeText(scriptText);
     setCopied(true);
@@ -120,11 +212,13 @@ export default function Home() {
 
   // Simulate incoming logs in terminal tab
   useEffect(() => {
-    if (activeTab !== 'logs') return;
+    if (activeTab !== 'logs' || clients.length === 0) return;
 
     const interval = setInterval(() => {
+      if (clients.length === 0) return;
       const timeNow = new Date().toLocaleTimeString([], { hour12: false });
       const randomClient = clients[Math.floor(Math.random() * clients.length)];
+      if (!randomClient) return;
       
       // Random event: success request, blocked request, or limit hit
       const randType = Math.random();
@@ -182,6 +276,73 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [activeTab, clients]);
 
+  if (!isAuthorized) {
+    return (
+      <main>
+        {/* Hero Section */}
+        <section className="hero-section">
+          <div className="hero-glow" />
+          <div className="hero-container">
+            <div className="hero-badge">
+              <span>✨</span> Single Deployment. Unlimited AI Chatbots.
+            </div>
+            <h1 className="hero-title">
+              Secure Multi-Tenant Chatbot Service
+            </h1>
+            <p className="hero-subtitle">
+              Deploy once, serve infinitely. Let your clients host their own branded AI assistants on their websites. Keeps OpenAI credentials secure on your backend, and controls monthly limits dynamically.
+            </p>
+          </div>
+        </section>
+
+        {/* Lock Screen */}
+        <section className="lockscreen-container">
+          <div className="lockscreen-card">
+            <div className="lockscreen-logo">R</div>
+            <h2 className="lockscreen-title">Admin Console Locked</h2>
+            <p className="lockscreen-subtitle">
+              Please enter the administrator password to view client list, logs, and manage tenants.
+            </p>
+            
+            {authError && <div className="alert-box">{authError}</div>}
+            
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              const pass = formData.get('password') as string;
+              verifyPassword(pass);
+            }}>
+              <div className="form-group" style={{ textAlign: 'left' }}>
+                <label className="form-label" htmlFor="admin-password">Password</label>
+                <input 
+                  type="password" 
+                  name="password"
+                  id="admin-password"
+                  className="form-input" 
+                  placeholder="••••••••" 
+                  required
+                  disabled={isValidating}
+                />
+              </div>
+              <button 
+                type="submit" 
+                className="btn form-submit-btn"
+                disabled={isValidating}
+              >
+                {isValidating ? 'Verifying...' : 'Unlock Dashboard'}
+              </button>
+            </form>
+          </div>
+        </section>
+
+        {/* Footer */}
+        <footer>
+          <p>© 2026 RemotelyBot chatbot engine. Powered by Next.js & Supabase. Premium Design System.</p>
+        </footer>
+      </main>
+    );
+  }
+
   return (
     <main>
       {/* Hero Section */}
@@ -212,9 +373,14 @@ export default function Home() {
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Administration Console</div>
               </div>
             </div>
-            <div className="dashboard-status">
-              <div className="dashboard-status-dot" />
-              <span>Service Active</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div className="dashboard-status">
+                <div className="dashboard-status-dot" />
+                <span>Service Active</span>
+              </div>
+              <button className="lock-btn" onClick={handleLogout}>
+                🔒 Lock Console
+              </button>
             </div>
           </div>
 
@@ -250,97 +416,135 @@ export default function Home() {
                 <div className="client-sidebar">
                   <div className="sidebar-title">Registered Clients</div>
                   <div className="client-list">
-                    {clients.map(client => (
-                      <button
-                        key={client.id}
-                        className={`client-item ${selectedClientId === client.id ? 'active' : ''}`}
-                        onClick={() => setSelectedClientId(client.id)}
-                      >
-                        <div className="client-item-header">
-                          <span className="client-item-name">{client.name}</span>
-                          <span className="client-item-limit">ID: {client.id}</span>
-                        </div>
-                        <div className="client-item-domain">{client.allowedDomain}</div>
-                      </button>
-                    ))}
+                    {isLoadingClients ? (
+                      <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                        Loading clients...
+                      </div>
+                    ) : clients.length === 0 ? (
+                      <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '14px', border: '1px dashed rgba(255,255,255,0.06)', borderRadius: '12px' }}>
+                        No clients registered yet.
+                      </div>
+                    ) : (
+                      clients.map(client => (
+                        <button
+                          key={client.id}
+                          className={`client-item ${selectedClientId === client.id ? 'active' : ''}`}
+                          onClick={() => setSelectedClientId(client.id)}
+                        >
+                          <div className="client-item-header">
+                            <span className="client-item-name">{client.name}</span>
+                            <span className="client-item-limit">ID: {client.id}</span>
+                          </div>
+                          <div className="client-item-domain">{client.allowedDomain}</div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <div className="add-client-container">
+                    <button 
+                      className="add-client-btn"
+                      onClick={() => {
+                        setNewClientId('');
+                        setNewClientName('');
+                        setNewSystemPrompt('');
+                        setNewAllowedDomain('');
+                        setNewMonthlyLimit(1000);
+                        setModalError('');
+                        setIsModalOpen(true);
+                      }}
+                    >
+                      ➕ Register New Client
+                    </button>
                   </div>
                   <div style={{ marginTop: '10px' }}>
                     <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                      💡 Row-level client setups live in Supabase. Adding or deleting rows updates client bots instantly.
+                      💡 Client setups live in Supabase. Adding new client configurations will write to the database and update client bots instantly.
                     </p>
                   </div>
                 </div>
 
                 {/* Details Section */}
                 <div className="detail-panel">
-                  <div className="detail-section">
-                    <div className="detail-section-title">
-                      ⚙️ Configuration details for: <strong>{activeClient.name}</strong>
+                  {!activeClient ? (
+                    <div className="detail-section" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '300px', padding: '60px 20px', textAlign: 'center' }}>
+                      <span style={{ fontSize: '32px', marginBottom: '16px' }}>💼</span>
+                      <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>No Active Client</h3>
+                      <p style={{ fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '300px' }}>
+                        Create a client tenant using the button in the sidebar to view configuration details and embed script snippet.
+                      </p>
                     </div>
-                    
-                    <div style={{ marginBottom: '20px' }}>
-                      <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>System Prompt (AI Personality)</label>
-                      <div style={{ background: 'rgba(255,255,255,0.03)', padding: '14px', borderRadius: '10px', fontSize: '13px', lineHeight: '1.5', border: '1px solid rgba(255,255,255,0.05)', color: '#e4e4e7' }}>
-                        "{activeClient.systemPrompt}"
-                      </div>
-                    </div>
+                  ) : (
+                    <>
+                      <div className="detail-section">
+                        <div className="detail-section-title">
+                          ⚙️ Configuration details for: <strong>{activeClient.name}</strong>
+                        </div>
+                        
+                        <div style={{ marginBottom: '20px' }}>
+                          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>System Prompt (AI Personality)</label>
+                          <div style={{ background: 'rgba(255,255,255,0.03)', padding: '14px', borderRadius: '10px', fontSize: '13px', lineHeight: '1.5', border: '1px solid rgba(255,255,255,0.05)', color: '#e4e4e7' }}>
+                            "{activeClient.systemPrompt}"
+                          </div>
+                        </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Allowed Website Domain</label>
-                        <div style={{ fontFamily: 'monospace', color: '#818cf8', fontWeight: 600 }}>{activeClient.allowedDomain}</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                          <div>
+                            <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Allowed Website Domain</label>
+                            <div style={{ fontFamily: 'monospace', color: '#818cf8', fontWeight: 600 }}>{activeClient.allowedDomain}</div>
+                          </div>
+                          <div>
+                            <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Security Status</label>
+                            <span style={{ fontSize: '12px', color: '#10b981', background: 'rgba(16, 185, 129, 0.1)', padding: '2px 8px', borderRadius: '4px', fontWeight: 500 }}>
+                              Domain Check Active
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Security Status</label>
-                        <span style={{ fontSize: '12px', color: '#10b981', background: 'rgba(16, 185, 129, 0.1)', padding: '2px 8px', borderRadius: '4px', fontWeight: 500 }}>
-                          Domain Check Active
-                        </span>
-                      </div>
-                    </div>
-                  </div>
 
-                  {/* Monthly Limit Progress */}
-                  <div className="detail-section">
-                    <div className="detail-section-title">📊 Usage Tracking (Monthly Limit)</div>
-                    <div className="usage-meter">
-                      <div className="usage-bar-bg">
-                        <div 
-                          className="usage-bar-fill" 
-                          style={{ width: `${Math.min(100, (activeClient.messagesUsed / activeClient.monthlyLimit) * 100)}%` }} 
-                        />
+                      {/* Monthly Limit Progress */}
+                      <div className="detail-section">
+                        <div className="detail-section-title">📊 Usage Tracking (Monthly Limit)</div>
+                        <div className="usage-meter">
+                          <div className="usage-bar-bg">
+                            <div 
+                              className="usage-bar-fill" 
+                              style={{ width: `${Math.min(100, (activeClient.messagesUsed / activeClient.monthlyLimit) * 100)}%` }} 
+                            />
+                          </div>
+                          <div className="usage-stats">
+                            <span>{activeClient.messagesUsed} / {activeClient.monthlyLimit} messages sent</span>
+                            <span style={{ fontWeight: 600, color: (activeClient.messagesUsed >= activeClient.monthlyLimit) ? 'var(--danger-color)' : 'var(--text-secondary)' }}>
+                              {Math.round((activeClient.messagesUsed / activeClient.monthlyLimit) * 100)}% of Cap
+                            </span>
+                          </div>
+                        </div>
+                        {activeClient.messagesUsed >= activeClient.monthlyLimit && (
+                          <div style={{ padding: '10px 14px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '8px', fontSize: '12px', color: '#fca5a5' }}>
+                            ⚠️ Monthly limit hit! The API route is automatically blocking further messages for this client.
+                          </div>
+                        )}
                       </div>
-                      <div className="usage-stats">
-                        <span>{activeClient.messagesUsed} / {activeClient.monthlyLimit} messages sent</span>
-                        <span style={{ fontWeight: 600, color: (activeClient.messagesUsed >= activeClient.monthlyLimit) ? 'var(--danger-color)' : 'var(--text-secondary)' }}>
-                          {Math.round((activeClient.messagesUsed / activeClient.monthlyLimit) * 100)}% of Cap
-                        </span>
-                      </div>
-                    </div>
-                    {activeClient.messagesUsed >= activeClient.monthlyLimit && (
-                      <div style={{ padding: '10px 14px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '8px', fontSize: '12px', color: '#fca5a5' }}>
-                        ⚠️ Monthly limit hit! The API route is automatically blocking further messages for this client.
-                      </div>
-                    )}
-                  </div>
 
-                  {/* Snippet Generator */}
-                  <div className="detail-section">
-                    <div className="detail-section-title">🔌 Embedded Snippet Code</div>
-                    <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                      Copy and paste the script snippet before the closing <code>&lt;/body&gt;</code> tag on {activeClient.name}'s website.
-                    </p>
-                    <div className="snippet-box">
-                      <button className="copy-btn" onClick={handleCopy}>
-                        {copied ? '✅ Copied!' : '📋 Copy Snippet'}
-                      </button>
-                      <pre style={{ overflowX: 'auto', margin: 0, paddingRight: '100px' }}>
-                        <code>{`<script 
+                      {/* Snippet Generator */}
+                      <div className="detail-section">
+                        <div className="detail-section-title">🔌 Embedded Snippet Code</div>
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                          Copy and paste the script snippet before the closing <code>&lt;/body&gt;</code> tag on {activeClient.name}'s website.
+                        </p>
+                        <div className="snippet-box">
+                          <button className="copy-btn" onClick={handleCopy}>
+                            {copied ? '✅ Copied!' : '📋 Copy Snippet'}
+                          </button>
+                          <pre style={{ overflowX: 'auto', margin: 0, paddingRight: '100px' }}>
+                            <code>{`<script 
   src="${currentOrigin}/widget.js" 
   data-client-id="${activeClient.id}">
 </script>`}</code>
-                      </pre>
-                    </div>
-                  </div>
+                          </pre>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -436,6 +640,141 @@ VALUES (
       <footer>
         <p>© 2026 RemotelyBot chatbot engine. Powered by Next.js & Supabase. Premium Design System.</p>
       </footer>
+
+      {/* Add Client Modal */}
+      {isModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Register New Chatbot Client</h3>
+              <button className="modal-close-btn" onClick={() => setIsModalOpen(false)}>×</button>
+            </div>
+            
+            {modalError && <div className="alert-box">{modalError}</div>}
+            
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              setIsCreatingClient(true);
+              setModalError('');
+              
+              try {
+                const res = await fetch('/api/admin/clients', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': adminPassword,
+                  },
+                  body: JSON.stringify({
+                    id: newClientId,
+                    name: newClientName,
+                    systemPrompt: newSystemPrompt,
+                    allowedDomain: newAllowedDomain,
+                    monthlyLimit: newMonthlyLimit,
+                  }),
+                });
+                
+                const data = await res.json();
+                if (res.ok) {
+                  setIsModalOpen(false);
+                  await fetchClients(adminPassword);
+                  setSelectedClientId(data.client.id);
+                } else {
+                  setModalError(data.error || 'Failed to register client.');
+                }
+              } catch (err) {
+                setModalError('Connection error. Please try again.');
+              } finally {
+                setIsCreatingClient(false);
+              }
+            }}>
+              <div className="form-group">
+                <label className="form-label" htmlFor="client-id">Client ID (Unique URL Slug)</label>
+                <input 
+                  type="text" 
+                  id="client-id"
+                  className="form-input" 
+                  placeholder="e.g. craftsfabrics" 
+                  value={newClientId}
+                  onChange={(e) => setNewClientId(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, ''))}
+                  required
+                  disabled={isCreatingClient}
+                />
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                  Alphanumeric, lowercase, hyphens/underscores only. Used in script snippet.
+                </span>
+              </div>
+              
+              <div className="form-group">
+                <label className="form-label" htmlFor="client-name">Client Name (Display Name)</label>
+                <input 
+                  type="text" 
+                  id="client-name"
+                  className="form-input" 
+                  placeholder="e.g. Crafts Fabrics Ltd." 
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  required
+                  disabled={isCreatingClient}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="allowed-domain">Allowed Website Domain</label>
+                <input 
+                  type="text" 
+                  id="allowed-domain"
+                  className="form-input" 
+                  placeholder="e.g. craftsfabrics.com or localhost" 
+                  value={newAllowedDomain}
+                  onChange={(e) => setNewAllowedDomain(e.target.value)}
+                  required
+                  disabled={isCreatingClient}
+                />
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                  Only requests originating from this domain will be allowed to query the chatbot API.
+                </span>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="monthly-limit">Monthly Message Cap</label>
+                <input 
+                  type="number" 
+                  id="monthly-limit"
+                  className="form-input" 
+                  placeholder="1000" 
+                  value={newMonthlyLimit}
+                  onChange={(e) => setNewMonthlyLimit(parseInt(e.target.value, 10) || 0)}
+                  min="1"
+                  required
+                  disabled={isCreatingClient}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="system-prompt">System Prompt (AI Personality)</label>
+                <textarea 
+                  id="system-prompt"
+                  className="form-input form-textarea" 
+                  placeholder="e.g. You are a shop assistant for CraftsFabrics..." 
+                  value={newSystemPrompt}
+                  onChange={(e) => setNewSystemPrompt(e.target.value)}
+                  required
+                  disabled={isCreatingClient}
+                />
+              </div>
+
+              <div className="modal-footer">
+                <button type="button" className="btn-secondary" onClick={() => setIsModalOpen(false)} disabled={isCreatingClient}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn" disabled={isCreatingClient}>
+                  {isCreatingClient ? 'Registering...' : 'Register Client'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
