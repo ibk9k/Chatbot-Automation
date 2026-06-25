@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
 
     // 6. Call Gemini and stream the completion
     const model = genAI.getGenerativeModel({ 
-      model: 'gemini-1.5-flash',
+      model: 'gemini-3.5-flash',
       systemInstruction: client.system_prompt
     });
 
