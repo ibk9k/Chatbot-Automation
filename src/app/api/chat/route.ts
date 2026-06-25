@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { supabase } from '@/lib/supabase';
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || 'placeholder-openai-key-for-build',
-});
+// Initialize Gemini client
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'placeholder-gemini-key');
 
 // Helper for CORS headers
 function getCorsHeaders(origin: string | null) {
@@ -28,7 +26,7 @@ export async function OPTIONS(request: NextRequest) {
 // POST handler for chat message requests
 export async function POST(request: NextRequest) {
   const origin = request.headers.get('origin');
-  
+
   try {
     const body = await request.json();
     const { message, clientId } = body;
@@ -85,22 +83,24 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 5. Check if OpenAI Key is configured
-    if (!process.env.OPENAI_API_KEY) {
+    // 5. Check if Gemini Key is configured
+    if (!process.env.GEMINI_API_KEY) {
       return new NextResponse(
-        JSON.stringify({ error: 'OpenAI API key is not configured on the server.' }),
+        JSON.stringify({ error: 'Gemini API key is not configured on the server.' }),
         { status: 500, headers: { ...getCorsHeaders(origin), 'Content-Type': 'application/json' } }
       );
     }
 
-    // 6. Call OpenAI and stream the completion
-    const openAiResponse = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: client.system_prompt },
-        { role: 'user', content: message }
-      ],
-      stream: true,
+    // 6. Call Gemini and stream the completion
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-1.5-flash',
+      systemInstruction: client.system_prompt
+    });
+
+    const result = await model.generateContentStream({
+      contents: [
+        { role: 'user', parts: [{ text: message }] }
+      ]
     });
 
     const encoder = new TextEncoder();
@@ -109,11 +109,11 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const chunk of openAiResponse) {
-            const content = chunk.choices[0]?.delta?.content || '';
-            if (content) {
-              responseText += content;
-              controller.enqueue(encoder.encode(content));
+          for await (const chunk of result.stream) {
+            const chunkText = chunk.text();
+            if (chunkText) {
+              responseText += chunkText;
+              controller.enqueue(encoder.encode(chunkText));
             }
           }
           controller.close();
@@ -213,4 +213,3 @@ function checkOrigin(originHeader: string | null, allowedDomain: string): boolea
     return false;
   }
 }
-
